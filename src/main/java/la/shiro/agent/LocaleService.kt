@@ -46,6 +46,12 @@ class LocaleService {
         config.setLocales(list)
         markUserSetLocale(config)
         updatePersistentConfiguration(am, config)
+        // updatePersistentConfiguration applies the config live, but its own
+        // persistence write can be silently rejected by the WRITE_SETTINGS
+        // appop for the shell uid - the next config recomputation then
+        // reverts the locale to the persisted value. Persist explicitly via
+        // the settings shell command, which uses the shell-privileged path.
+        persistSystemLocales(list.toLanguageTags())
         val root = JSONObject()
         root.put("ok", true)
         root.put("locale", list.toLanguageTags())
@@ -84,6 +90,25 @@ class LocaleService {
     private fun getConfiguration(am: Any): Configuration {
         val method: Method = Class.forName("android.app.IActivityManager").getMethod("getConfiguration")
         return invokeUnwrapped(method, am) as Configuration
+    }
+
+    private fun persistSystemLocales(tags: String) {
+        val proc: Process = Runtime.getRuntime()
+            .exec(arrayOf("settings", "put", "system", "system_locales", tags))
+        val exit: Int = proc.waitFor()
+        val err: String = proc.errorStream.bufferedReader().readText().trim()
+        val out: String = proc.inputStream.bufferedReader().readText().trim()
+        if (exit != 0 || err.isNotEmpty()) {
+            val detail: String = if (err.isNotEmpty()) err else out
+            throw IllegalStateException("settings put system_locales failed: exit=$exit $detail")
+        }
+        try {
+            Runtime.getRuntime()
+                .exec(arrayOf("setprop", "persist.sys.locale", tags.substringBefore(",")))
+                .waitFor()
+        } catch (e: Throwable) {
+            System.err.println("[Agent] setprop persist.sys.locale failed: ${e.message}")
+        }
     }
 
     private fun markUserSetLocale(config: Configuration) {
