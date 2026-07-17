@@ -25,6 +25,7 @@ class SimpleHttpServer(
     private val screenCapture: ScreenCapture = ScreenCapture(uiAutomation)
     private val packageService: PackageService = PackageService(context)
     private val deviceInfo: DeviceInfo = DeviceInfo(context)
+    private val localeService: LocaleService = LocaleService()
 
     val isAlive: Boolean get() = running.get()
 
@@ -88,6 +89,8 @@ class SimpleHttpServer(
             "/icon" -> handleIcon(params, output)
             "/info" -> handleInfo(output)
             "/device-info" -> handleDeviceInfo(output)
+            "/locales" -> handleLocales(output)
+            "/set-locale" -> handleSetLocale(params, output)
             "/stop" -> {
                 respondText(output, 200, "stopping")
                 stop()
@@ -183,6 +186,32 @@ class SimpleHttpServer(
         } catch (e: Throwable) {
             System.err.println("[Agent] Device info build failed: ${e.message}")
             respondText(output, 500, "device-info failed: ${e.message}")
+        }
+    }
+
+    private fun handleLocales(output: OutputStream) {
+        try {
+            val json: String = localeService.buildLocalesJson()
+            respondText(output, 200, json, "application/json; charset=utf-8")
+        } catch (e: Throwable) {
+            System.err.println("[Agent] Locales query failed: ${e.message}")
+            respondText(output, 500, "locales failed: ${e.message}")
+        }
+    }
+
+    private fun handleSetLocale(params: Map<String, String>, output: OutputStream) {
+        val tag: String? = params["tag"]
+        if (tag.isNullOrBlank()) {
+            respondText(output, 400, localeService.errorJson("missing tag parameter"), "application/json; charset=utf-8")
+            return
+        }
+        try {
+            val json: String = localeService.setLocale(tag)
+            respondText(output, 200, json, "application/json; charset=utf-8")
+        } catch (e: Throwable) {
+            System.err.println("[Agent] Set locale failed for $tag: ${e.message}")
+            val status: Int = if (e is IllegalArgumentException) 400 else 500
+            respondText(output, status, localeService.errorJson(e.message ?: e.javaClass.simpleName), "application/json; charset=utf-8")
         }
     }
 
