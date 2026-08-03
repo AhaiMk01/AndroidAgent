@@ -158,7 +158,11 @@ class SimpleHttpServer(
             return
         }
         try {
-            val schemes: String = packageService.getSigningSchemes(packageName)
+            val schemes: String? = packageService.getSigningSchemes(packageName)
+            if (schemes == null) {
+                respondText(output, 404, "package not found: $packageName")
+                return
+            }
             respondText(output, 200, schemes, "text/plain; charset=utf-8")
         } catch (e: Throwable) {
             System.err.println("[Agent] Signature scan failed for $packageName: $e")

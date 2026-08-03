@@ -111,9 +111,17 @@ class PackageService(private val context: Context) {
         }
     }
 
-    fun getSigningSchemes(packageName: String): String {
+    // Null means "no such package", empty means "installed, no scheme detected".
+    // Collapsing both into "" made the endpoint answer 200 with an empty body
+    // for a package that does not exist, so the caller could not tell the two
+    // apart and the app reported an uninstalled package as 未签名.
+    fun getSigningSchemes(packageName: String): String? {
+        val appInfo: ApplicationInfo = try {
+            packageManager.getApplicationInfo(packageName, 0)
+        } catch (_: Throwable) {
+            return null
+        }
         return try {
-            val appInfo: ApplicationInfo = packageManager.getApplicationInfo(packageName, 0)
             val apkPath: String = appInfo.sourceDir
             val apkSize: Long = File(apkPath).length()
             val cacheKey = "$apkPath:$apkSize"
