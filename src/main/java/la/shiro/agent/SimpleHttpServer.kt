@@ -62,19 +62,34 @@ class SimpleHttpServer(
             try {
                 client.soTimeout = 30_000
                 val input = BufferedReader(InputStreamReader(client.getInputStream()))
-                val requestLine: String = input.readLine() ?: return
+                // Every exit from here must write an HTTP response. Returning
+                // silently closes the socket with no status, which the host
+                // cannot tell apart from a dead agent - so one malformed or
+                // truncated request made a perfectly healthy agent look dead,
+                // and the host then killed and redeployed it.
+                val output: OutputStream = client.getOutputStream()
+                val requestLine: String? = input.readLine()
+                if (requestLine == null) {
+                    respondText(output, 400, "empty request")
+                    return
+                }
                 val parts: List<String> = requestLine.split(" ")
-                if (parts.size < 2) return
+                if (parts.size < 2) {
+                    respondText(output, 400, "malformed request line")
+                    return
+                }
                 val method: String = parts[0]
                 val fullPath: String = parts[1]
                 val pathAndQuery: Pair<String, String> = splitPathAndQuery(fullPath)
                 val path: String = pathAndQuery.first
                 val params: Map<String, String> = parseQueryParams(pathAndQuery.second)
                 consumeHeaders(input)
-                val output: OutputStream = client.getOutputStream()
                 route(method, path, params, output)
             } catch (e: Throwable) {
                 System.err.println("[Agent] Handle error: ${e.message}")
+                // Best effort: if the failure happened before any bytes went
+                // out, the caller still gets a status instead of a dead socket.
+                try { respondText(client.getOutputStream(), 500, "agent error: ${e.message}") } catch (_: Throwable) { }
             }
         }
     }
@@ -215,14 +230,21 @@ class SimpleHttpServer(
         }
     }
 
+    // Built with JSONObject rather than string interpolation. Build.BRAND and
+    // Build.MODEL are vendor-controlled: one containing a quote or a backslash
+    // produced malformed JSON, which the host cannot parse - and /info is what
+    // SupportsCurrentEndpoints probes, so an unparseable answer reads as a
+    // stale agent and triggers a redeploy loop on exactly the odd ROMs this
+    // tool exists to test.
     private fun buildDeviceInfoJson(): String {
-        val brand: String = android.os.Build.BRAND
-        val model: String = android.os.Build.MODEL
-        val sdk: Int = android.os.Build.VERSION.SDK_INT
-        val release: String = android.os.Build.VERSION.RELEASE
-        val version: String = BuildConfig.VERSION_NAME
-        val versionCode: Int = BuildConfig.VERSION_CODE
-        return """{"brand":"$brand","model":"$model","sdk":$sdk,"release":"$release","agentVersion":"$version","agentVersionCode":$versionCode}"""
+        val obj = org.json.JSONObject()
+        obj.put("brand", android.os.Build.BRAND)
+        obj.put("model", android.os.Build.MODEL)
+        obj.put("sdk", android.os.Build.VERSION.SDK_INT)
+        obj.put("release", android.os.Build.VERSION.RELEASE)
+        obj.put("agentVersion", BuildConfig.VERSION_NAME)
+        obj.put("agentVersionCode", BuildConfig.VERSION_CODE)
+        return obj.toString()
     }
 
     private fun respondText(output: OutputStream, status: Int, body: String, contentType: String = "text/plain; charset=utf-8") {
@@ -243,6 +265,7 @@ class SimpleHttpServer(
     private fun buildResponseHeader(status: Int, contentType: String, contentLength: Int): String {
         val statusText: String = when (status) {
             200 -> "OK"
+            400 -> "Bad Request"
             404 -> "Not Found"
             500 -> "Internal Server Error"
             else -> "Unknown"
