@@ -55,6 +55,13 @@ class PackageService(private val context: Context) {
         val packages: List<PackageInfo> = packageManager.getInstalledPackages(flags)
         val result = JSONArray()
         for (pkg in packages) {
+            // Per-package guard: this loop reads another app's resources, parses
+            // its APK signing block and touches hidden framework fields, any of
+            // which can throw an Error rather than an Exception on a vendor ROM.
+            // Unguarded, one malformed package aborted the whole response and the
+            // tester saw an empty app list with no explanation. Dropping the one
+            // entry is the only degradation that keeps the other 200 usable.
+            try {
             val appInfo: ApplicationInfo = pkg.applicationInfo ?: continue
             val isSystem: Boolean = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             if (userOnly && isSystem) continue
@@ -82,6 +89,9 @@ class PackageService(private val context: Context) {
             obj.put("signatureSha256", extractSignatureSha256(pkg))
             obj.put("dataDir", appInfo.dataDir ?: JSONObject.NULL)
             result.put(obj)
+            } catch (_: Throwable) {
+                // Skip this package; the rest of the list still goes out.
+            }
         }
         return result.toString()
     }
@@ -124,7 +134,7 @@ class PackageService(private val context: Context) {
                 }
                 if (hasSf) schemes.add("V1")
             }
-        } catch (_: Exception) { }
+        } catch (_: Throwable) { }
         try {
             RandomAccessFile(file, "r").use { raf ->
                 val eocdOffset: Long = findEocdOffset(raf) ?: return@use
@@ -154,7 +164,7 @@ class PackageService(private val context: Context) {
                     pos += 8 + pairLen
                 }
             }
-        } catch (_: Exception) { }
+        } catch (_: Throwable) { }
         if (File("$apkPath.idsig").exists()) schemes.add("V4")
         return schemes.joinToString("+")
     }
@@ -266,7 +276,7 @@ class PackageService(private val context: Context) {
             } else {
                 appInfo.packageName
             }
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             appInfo.packageName
         }
     }
